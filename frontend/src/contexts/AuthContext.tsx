@@ -2,16 +2,7 @@
 'use client';
 
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { api } from '@/lib/api';
-
-interface User {
-  id: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  isVerified: boolean;
-  createdAt: string;
-}
+import { apiClient, type User, type RegisterData } from '@/lib/api';
 
 interface AuthState {
   user: User | null;
@@ -25,14 +16,6 @@ interface AuthContextType extends AuthState {
   register: (userData: RegisterData) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
-}
-
-interface RegisterData {
-  email: string;
-  password: string;
-  firstName: string;
-  lastName: string;
-  dateOfBirth: string;
 }
 
 type AuthAction =
@@ -98,63 +81,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Check for existing auth on mount
   useEffect(() => {
     const checkAuth = async () => {
+      // Only run in browser
+      if (typeof window === 'undefined') return;
+      
       const token = localStorage.getItem('accessToken');
       if (!token) return;
 
       try {
         dispatch({ type: 'AUTH_START' });
-        const response = await api.get('/auth/profile');
-        dispatch({ type: 'AUTH_SUCCESS', payload: response.data.data });
+        const response = await apiClient.getProfile();
+        dispatch({ type: 'AUTH_SUCCESS', payload: response.data.user });
       } catch (error) {
-        // Token might be expired, try to refresh
-        await handleTokenRefresh();
+        console.error('Auth check failed:', error);
+        // Token might be expired, clear it
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        dispatch({ type: 'AUTH_ERROR', payload: 'Session expired' });
       }
     };
 
     checkAuth();
   }, []);
 
-  const handleTokenRefresh = async () => {
-    try {
-      const refreshToken = localStorage.getItem('refreshToken');
-      if (!refreshToken) throw new Error('No refresh token');
-
-      const response = await api.post('/auth/refresh-token', {
-        refreshToken,
-      });
-
-      const { accessToken, refreshToken: newRefreshToken } = response.data.data;
-      
-      localStorage.setItem('accessToken', accessToken);
-      localStorage.setItem('refreshToken', newRefreshToken);
-
-      // Get user profile with new token
-      const profileResponse = await api.get('/auth/profile');
-      dispatch({ type: 'AUTH_SUCCESS', payload: profileResponse.data.data });
-    } catch (error) {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
-      dispatch({ type: 'AUTH_ERROR', payload: 'Session expired' });
-    }
-  };
-
   const login = async (email: string, password: string) => {
     try {
       dispatch({ type: 'AUTH_START' });
       
-      const response = await api.post('/auth/login', {
-        email,
-        password,
-      });
-
-      const { user, tokens } = response.data.data;
+      const response = await apiClient.login({ email, password });
+      const { user, accessToken, refreshToken } = response.data;
       
-      localStorage.setItem('accessToken', tokens.accessToken);
-      localStorage.setItem('refreshToken', tokens.refreshToken);
+      // Only access localStorage in browser
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('accessToken', accessToken);
+        localStorage.setItem('refreshToken', refreshToken);
+      }
       
       dispatch({ type: 'AUTH_SUCCESS', payload: user });
     } catch (error: any) {
-      const errorMessage = error.response?.data?.message || 'Login failed';
+      console.error('Login failed:', error);
+      const errorMessage = error.message || 'Login failed';
       dispatch({ type: 'AUTH_ERROR', payload: errorMessage });
       throw error;
     }
@@ -164,15 +129,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       dispatch({ type: 'AUTH_START' });
       
-      const response = await api.post('/auth/register', userData);
-      const { user, tokens } = response.data.data;
+      const response = await apiClient.register(userData);
+      const { user, accessToken, refreshToken } = response.data;
       
-      localStorage.setItem('accessToken', tokens.accessToken);
-      localStorage.setItem('refreshToken', tokens.refreshToken);
+      // Only access localStorage in browser
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('accessToken', accessToken);
+        localStorage.setItem('refreshToken', refreshToken);
+      }
       
       dispatch({ type: 'AUTH_SUCCESS', payload: user });
     } catch (error: any) {
-      const errorMessage = error.response?.data?.message || 'Registration failed';
+      console.error('Registration failed:', error);
+      const errorMessage = error.message || 'Registration failed';
       dispatch({ type: 'AUTH_ERROR', payload: errorMessage });
       throw error;
     }
@@ -180,12 +149,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try {
-      await api.post('/auth/logout');
+      await apiClient.logout();
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
+      // Only access localStorage in browser
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+      }
       dispatch({ type: 'AUTH_LOGOUT' });
     }
   };
